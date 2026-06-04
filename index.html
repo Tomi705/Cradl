@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex" />
+<title>Cradl — the daily lacrosse read</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Spline+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; background: #0c0e0d; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo } = React;
+
+/* ============================================================
+   CRADL — GeoGuessr for lacrosse film.
+   You're dropped into a clip cold. You commit a read before the
+   play resolves. Then:
+     PREDICT  = the question WITH a real answer (the play resolved
+                one way) -> scored like GeoGuessr "distance".
+     DIAGNOSE / ADJUST = the questions with NO right answer ->
+                you see WHERE THE ROOM SPLIT, and whether you're
+                in the minority. The disagreement is the product.
+   Distributions are SEEDED/illustrative until a backend collects
+   real coach answers. Only your own answer is real in this demo.
+   ============================================================ */
+
+const PALETTE = {
+  bg: "#0c0e0d", panel: "#15181a", panel2: "#1c2023", line: "#2b3034",
+  ink: "#eef2ee", mute: "#7d8a82", acid: "#c8f032", amber: "#f0a832",
+  red: "#e6553f", blue: "#6fa8ff",
+};
+const DISPLAY = "'Bebas Neue', 'Arial Narrow', sans-serif";
+const BODY = "'Spline Sans', system-ui, sans-serif";
+const Q = [0.4, 0.55, 0.7, 0.85, 0.95];
+const CAT_COLORS = {
+  CLEAR: "#c8f032", RIDE: "#f0a832", EMO: "#5ad1c4",
+  MAN_DOWN: "#e6553f", TRANSITION: "#9b8cf0", DEFENSE: "#6fa8ff",
+};
+
+const Ico = ({ children, size = 16, style, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style} className={className}>{children}</svg>
+);
+const ChevronRight = (p) => <Ico {...p}><path d="m9 18 6-6-6-6" /></Ico>;
+const Check = (p) => <Ico {...p}><path d="M20 6 9 17l-5-5" /></Ico>;
+const Crosshair = (p) => <Ico {...p}><circle cx="12" cy="12" r="10" /><path d="M22 12h-4M6 12H2M12 6V2M12 22v-4" /></Ico>;
+const Share = (p) => <Ico {...p}><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="m8.6 13.5 6.8 4M15.4 6.5 8.6 10.5" /></Ico>;
+const Flame = (p) => <Ico {...p}><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" /></Ico>;
+const MessageBox = (p) => <Ico {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Ico>;
+const MapPin = (p) => <Ico {...p}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></Ico>;
+
+/* ---------- clip pool ---------- */
+const CLIPS = [
+  {
+    id: "c1", category: "CLEAR", title: "Failed clear vs. 10-man ride, 4Q",
+    context: { score: "Down 1", time: "2:40 / 4Q", manpower: "Even" }, video: "",
+    predict: { text: "What happens on this possession?", options: ["Successful clear", "Turnover", "Shot against", "Timeout / reset", "Penalty"], field: [9, 31, 6, 8, 6] },
+    diagnose: { text: "What's the key factor on this possession?", options: ["Ride pressure", "Outlet structure", "Spacing", "Goalie decision", "Matchup"], field: [22, 19, 10, 5, 4] },
+    adjust: { text: "What's the right adjustment?", options: ["Change clear structure", "Outlet to sideline", "Burn timeout", "Switch personnel", "Hold pattern"], field: [24, 14, 11, 8, 3] },
+    outcome: { actual: 1, summary: "Pressured turnover at midline; the sideline outlet was open but never used.", process: "DEFENSIBLE" },
+  },
+  {
+    id: "c2", category: "EMO", title: "EMO set, 1:10 remaining, down 2",
+    context: { score: "Down 2", time: "1:10 / 4Q", manpower: "EMO (6v5)" }, video: "",
+    predict: { text: "What happens on this EMO possession?", options: ["Goal", "Save", "Turnover", "Shot wide", "Reset for last shot"], field: [18, 12, 9, 7, 21] },
+    diagnose: { text: "What's the key factor here?", options: ["Ball movement tempo", "Off-ball spacing", "Pipe presence", "Slide read", "Shooter selection"], field: [12, 24, 8, 14, 9] },
+    adjust: { text: "What's the right adjustment?", options: ["Invert the set", "Skip-pass earlier", "Plant a pipe", "Slow tempo / reset", "Iso the matchup"], field: [10, 19, 17, 13, 8] },
+    outcome: { actual: 0, summary: "Skip to the weakside finisher after the X-slide committed; goal.", process: "SOUND" },
+  },
+  {
+    id: "c3", category: "DEFENSE", title: "Unsettled defense, transition 4v3",
+    context: { score: "Tied", time: "8:15 / 3Q", manpower: "4v3 against" }, video: "",
+    predict: { text: "How does this defensive sequence end?", options: ["Stop / clear", "Goal against", "Shot saved", "Penalty drawn", "Turnover forced"], field: [14, 17, 11, 5, 9] },
+    diagnose: { text: "What's the key factor?", options: ["Slide timing", "Hot/communication", "Recovery speed", "Crease coverage", "Top-side angle"], field: [21, 16, 8, 6, 5] },
+    adjust: { text: "What's the right adjustment?", options: ["Slide earlier", "Zone the 4v3", "Protect the pipe", "Take away inside", "Match speed back"], field: [13, 9, 18, 14, 4] },
+    outcome: { actual: 4, summary: "Early slide plus a hard recovery forces a contested skip; thrown away.", process: "SOUND" },
+  },
+];
+
+const EPOCH = Date.UTC(2026, 0, 1);
+function dayNumber() { return Math.floor((Date.now() - EPOCH) / 86400000); }
+
+/* ---------- math ---------- */
+function share(counts, idx) { const N = counts.reduce((a, b) => a + b, 0); return N ? counts[idx] / N : 0; }
+function topShare(counts) { const N = counts.reduce((a, b) => a + b, 0); return N ? Math.max.apply(null, counts) / N : 0; }
+
+/* position in the room — for the NO-ANSWER questions (diagnose/adjust) */
+function positionFor(counts, idx) {
+  const s = share(counts, idx);
+  const isModal = counts[idx] === Math.max.apply(null, counts);
+  const contested = topShare(counts) < 0.45;
+  if (contested) return { key: "split", label: "SPLIT CALL", color: PALETTE.amber, glyph: "🟧", note: "the room is divided — no majority", minority: true };
+  if (isModal) return { key: "with", label: "WITH THE ROOM", color: PALETTE.acid, glyph: "🟩", note: Math.round(s * 100) + "% read it your way", minority: false };
+  return { key: "minority", label: "MINORITY READ", color: PALETTE.blue, glyph: "🟦", note: "only " + Math.round(s * 100) + "% saw it your way", minority: true };
+}
+
+function videoEmbed(url) {
+  if (!url || typeof url !== "string") return { type: "none" };
+  const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([\w-]{11})/);
+  if (yt) return { type: "youtube", src: "https://www.youtube.com/embed/" + yt[1] };
+  if (/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(url)) return { type: "file", src: url };
+  return { type: "iframe", src: url };
+}
+
+/* ---------- atoms ---------- */
+const Tag = ({ cat }) => (
+  <span style={{ fontFamily: DISPLAY, letterSpacing: "0.08em", color: PALETTE.bg, background: CAT_COLORS[cat] || PALETTE.acid }}
+    className="px-2 py-0.5 text-sm">{cat.replace("_", " ")}</span>
+);
+
+function DistBar({ options, counts, highlight, actual }) {
+  const N = counts.reduce((a, b) => a + b, 0);
+  return (
+    <div className="space-y-1.5">
+      {options.map((opt, i) => {
+        const pct = N ? Math.round((counts[i] / N) * 100) : 0;
+        const isPick = i === highlight; const isActual = i === actual;
+        return (
+          <div key={i} className="flex items-center gap-3">
+            <div className="w-40 shrink-0 text-sm flex items-center gap-1.5" style={{ color: isActual ? PALETTE.acid : isPick ? PALETTE.ink : PALETTE.mute }}>
+              {isActual && <Check size={13} style={{ color: PALETTE.acid }} />}{opt}
+            </div>
+            <div className="flex-1 h-5 relative" style={{ background: PALETTE.panel2 }}>
+              <div className="h-full" style={{ width: pct + "%", background: isActual ? PALETTE.acid : isPick ? PALETTE.blue : PALETTE.line }} />
+              <span className="absolute right-1.5 top-0 text-xs leading-5" style={{ color: PALETTE.mute }}>{pct}%</span>
+            </div>
+            {isPick && <span className="text-xs shrink-0" style={{ color: isActual ? PALETTE.acid : PALETTE.blue, fontFamily: DISPLAY, letterSpacing: "0.05em" }}>YOU</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------- the read (commit cold, before the play resolves) ---------- */
+function DailyRead({ clip, onComplete }) {
+  const [predict, setPredict] = useState(null);
+  const [confidence, setConfidence] = useState(3);
+  const [diagnose, setDiagnose] = useState(null);
+  const [adjust, setAdjust] = useState(null);
+  const ready = predict !== null && diagnose !== null && adjust !== null;
+  const vid = videoEmbed(clip.video);
+
+  const Step = ({ n, label, prompt, value, setValue, tag }) => (
+    <div style={{ borderColor: PALETTE.line }} className="border p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <span style={{ fontFamily: DISPLAY, background: PALETTE.acid, color: PALETTE.bg }} className="px-2 text-sm">{n}</span>
+        <span className="text-xs uppercase tracking-widest" style={{ color: PALETTE.mute }}>{label}</span>
+        {tag && <span className="text-xs ml-auto" style={{ color: PALETTE.mute }}>{tag}</span>}
+      </div>
+      <div className="mb-3" style={{ color: PALETTE.ink }}>{prompt.text}</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {prompt.options.map((opt, i) => {
+          const sel = value === i;
+          return (
+            <button key={i} onClick={() => setValue(i)}
+              style={{ borderColor: sel ? PALETTE.acid : PALETTE.line, background: sel ? PALETTE.panel2 : "transparent", color: sel ? PALETTE.acid : PALETTE.ink }}
+              className="border px-3 py-2 text-left text-sm flex items-center justify-between">
+              <span>{opt}</span>{sel && <Check size={15} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Tag cat={clip.category} />
+        <h2 style={{ fontFamily: DISPLAY, color: PALETTE.ink }} className="text-2xl tracking-wide">{clip.title}</h2>
+      </div>
+      <p className="text-xs flex items-center gap-1.5" style={{ color: PALETTE.mute }}>
+        <MapPin size={13} /> Read it cold. Commit before the play resolves — you won't see the room until you lock in.
+      </p>
+
+      <div style={{ background: "#000", borderColor: PALETTE.line }} className="border aspect-video relative overflow-hidden">
+        {vid.type === "youtube" || vid.type === "iframe"
+          ? <iframe src={vid.src} className="w-full h-full" style={{ border: 0 }} allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowFullScreen title={clip.title} />
+          : vid.type === "file"
+            ? <video src={vid.src} controls className="w-full h-full" style={{ objectFit: "contain", background: "#000" }} />
+            : <div className="w-full h-full flex items-center justify-center"><Crosshair size={40} style={{ color: PALETTE.line }} /></div>}
+        <div className="absolute bottom-2 left-2 flex gap-3 text-xs pointer-events-none" style={{ color: PALETTE.mute }}>
+          <span>{clip.context.score}</span><span>{clip.context.time}</span><span>{clip.context.manpower}</span>
+        </div>
+      </div>
+
+      <Step n={1} label="Predict" prompt={clip.predict} value={predict} setValue={setPredict} tag="has a real answer" />
+      {predict !== null && (
+        <div style={{ borderColor: PALETTE.line }} className="border p-4">
+          <div className="text-xs uppercase tracking-widest mb-2" style={{ color: PALETTE.mute }}>How sure are you?</div>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map((c) => (
+              <button key={c} onClick={() => setConfidence(c)}
+                style={{ borderColor: confidence === c ? PALETTE.acid : PALETTE.line, color: confidence === c ? PALETTE.acid : PALETTE.mute, fontFamily: DISPLAY }}
+                className="border w-10 h-10 text-xl">{c}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      <Step n={2} label="Diagnose" prompt={clip.diagnose} value={diagnose} setValue={setDiagnose} tag="no right answer" />
+      <Step n={3} label="Adjust" prompt={clip.adjust} value={adjust} setValue={setAdjust} tag="no right answer" />
+
+      <button disabled={!ready} onClick={() => onComplete({ predict, confidence, diagnose, adjust })}
+        style={{ background: ready ? PALETTE.acid : PALETTE.line, color: PALETTE.bg, fontFamily: DISPLAY }}
+        className="w-full py-3 text-xl tracking-widest flex items-center justify-center gap-2">
+        LOCK IN YOUR READ <ChevronRight size={20} />
+      </button>
+    </div>
+  );
+}
+
+/* ---------- reveal ---------- */
+function Reveal({ clip, pick, sessionReads, onNext, onShare, hasNext }) {
+  const matched = pick.predict === clip.outcome.actual;
+  const dPos = positionFor(clip.diagnose.field, pick.diagnose);
+  const aPos = positionFor(clip.adjust.field, pick.adjust);
+
+  return (
+    <div className="space-y-6">
+      {/* --- THE ANSWER QUESTION: predict --- */}
+      <div>
+        <div style={{ fontFamily: DISPLAY, color: PALETTE.acid }} className="text-xl tracking-wider mb-1">THE PLAY RESOLVED</div>
+        <div style={{ background: PALETTE.panel, borderColor: PALETTE.line }} className="border p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs uppercase tracking-widest" style={{ color: PALETTE.mute }}>What actually happened</span>
+            <span style={{ fontFamily: DISPLAY, color: clip.outcome.process === "SOUND" ? PALETTE.acid : clip.outcome.process === "UNSOUND" ? PALETTE.red : PALETTE.amber }} className="ml-auto text-sm tracking-wide">
+              PROCESS: {clip.outcome.process}
+            </span>
+          </div>
+          <div className="text-sm mb-3" style={{ color: PALETTE.ink }}>{clip.outcome.summary}</div>
+          <DistBar options={clip.predict.options} counts={clip.predict.field} highlight={pick.predict} actual={clip.outcome.actual} />
+          <div className="text-xs mt-3" style={{ color: PALETTE.mute }}>
+            {matched ? "You read the outcome right — but it's one noisy possession. " : "Your prediction missed — but a sound read can still lose a possession. "}
+            Predict is the only question with a real answer; your skill on it is a season-long calibration stat, not this single clip.
+          </div>
+        </div>
+      </div>
+
+      {/* --- THE DISAGREEMENT QUESTIONS: diagnose + adjust --- */}
+      <div>
+        <div style={{ fontFamily: DISPLAY, color: PALETTE.blue }} className="text-xl tracking-wider mb-1">WHERE THE ROOM SPLIT</div>
+        <div className="text-xs mb-3" style={{ color: PALETTE.mute }}>No right answer on these. The disagreement is the point.</div>
+
+        {[{ label: "DIAGNOSE", prompt: clip.diagnose, choice: pick.diagnose, pos: dPos },
+          { label: "ADJUST", prompt: clip.adjust, choice: pick.adjust, pos: aPos }].map((r) => (
+          <div key={r.label} className="mb-5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs uppercase tracking-widest" style={{ color: PALETTE.mute }}>{r.label}</span>
+              <span style={{ color: r.pos.color, fontFamily: DISPLAY }} className="text-sm tracking-wide ml-1">{r.pos.glyph} {r.pos.label}</span>
+              <span className="text-xs ml-auto" style={{ color: PALETTE.mute }}>{r.pos.note}</span>
+            </div>
+            <DistBar options={r.prompt.options} counts={r.prompt.field} highlight={r.choice} actual={-1} />
+            {r.pos.minority && (
+              <div className="flex items-start gap-1.5 mt-2 text-sm p-2" style={{ color: PALETTE.blue, background: PALETTE.panel2 }}>
+                <MessageBox size={14} className="mt-0.5 shrink-0" />
+                <span>You're against the grain here. If a coach who picked the majority option challenged you — could you defend this read out loud?</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background: PALETTE.panel2, borderColor: PALETTE.line }} className="border p-4 flex items-center gap-3">
+        <Flame size={20} style={{ color: PALETTE.amber }} />
+        <div className="flex-1">
+          <div style={{ color: PALETTE.ink }} className="text-sm">Reads logged this session</div>
+          <div className="text-xs" style={{ color: PALETTE.mute }}>a backend turns this into a day-over-day calibration streak</div>
+        </div>
+        <div style={{ fontFamily: DISPLAY, color: PALETTE.amber }} className="text-3xl">{sessionReads}</div>
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={onShare} style={{ borderColor: PALETTE.acid, color: PALETTE.acid, fontFamily: DISPLAY }}
+          className="flex-1 py-3 border text-lg tracking-widest flex items-center justify-center gap-2">
+          <Share size={17} /> SHARE GRID
+        </button>
+        {hasNext && (
+          <button onClick={onNext} style={{ background: PALETTE.acid, color: PALETTE.bg, fontFamily: DISPLAY }}
+            className="flex-1 py-3 text-lg tracking-widest flex items-center justify-center gap-2">
+            NEXT DROP <ChevronRight size={18} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- share grid ---------- */
+function shareText(clip, pick) {
+  const map = { with: "🟩", minority: "🟦", split: "🟧" };
+  const d = positionFor(clip.diagnose.field, pick.diagnose);
+  const a = positionFor(clip.adjust.field, pick.adjust);
+  const matched = pick.predict === clip.outcome.actual;
+  return [
+    "Cradl #" + dayNumber(),
+    "Predict  " + (matched ? "🎯" : "⬜") + "  (the one with an answer)",
+    "Diagnose " + map[d.key],
+    "Adjust   " + map[a.key],
+    "🟩 with the room  🟦 minority read  🟧 split call",
+    "where did you land? play today's drop",
+  ].join("\n");
+}
+
+function ShareCard({ text, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => setCopied(true)).catch(() => setCopied(true));
+    else setCopied(true);
+  };
+  return (
+    <div className="fixed inset-0 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: PALETTE.panel, borderColor: PALETTE.line }} className="border max-w-sm w-full p-5">
+        <pre style={{ color: PALETTE.ink, fontFamily: BODY }} className="text-sm whitespace-pre-wrap mb-4 leading-relaxed">{text}</pre>
+        <button onClick={copy} style={{ background: PALETTE.acid, color: PALETTE.bg, fontFamily: DISPLAY }} className="w-full py-2 text-lg tracking-widest">
+          {copied ? "COPIED ✓" : "COPY TO SHARE"}
+        </button>
+        <button onClick={onClose} style={{ color: PALETTE.mute }} className="w-full py-2 text-sm mt-1">close</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- root ---------- */
+function Cradl() {
+  const order = useMemo(() => {
+    const start = ((dayNumber() % CLIPS.length) + CLIPS.length) % CLIPS.length;
+    return CLIPS.map((_, i) => CLIPS[(start + i) % CLIPS.length]);
+  }, []);
+  const [idx, setIdx] = useState(0);
+  const [picks, setPicks] = useState({});
+  const [showShare, setShowShare] = useState(false);
+
+  const clip = order[idx];
+  const pick = picks[clip.id];
+  const sessionReads = Object.keys(picks).length;
+  const hasNext = idx < order.length - 1;
+
+  return (
+    <div style={{ background: PALETTE.bg, color: PALETTE.ink, fontFamily: BODY, minHeight: "100vh" }}>
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        <div className="flex items-center justify-between mb-6 pb-4" style={{ borderBottom: "1px solid " + PALETTE.line }}>
+          <div className="flex items-baseline gap-2">
+            <span style={{ fontFamily: DISPLAY, color: PALETTE.acid }} className="text-4xl tracking-wider">CRADL</span>
+            <span style={{ color: PALETTE.mute }} className="text-xs uppercase tracking-widest">the daily read · #{dayNumber()}</span>
+          </div>
+          <span className="text-xs" style={{ color: PALETTE.mute }}>drop {idx + 1} / {order.length}</span>
+        </div>
+
+        {!pick
+          ? <DailyRead clip={clip} onComplete={(r) => setPicks((s) => Object.assign({}, s, { [clip.id]: r }))} />
+          : <Reveal clip={clip} pick={pick} sessionReads={sessionReads} hasNext={hasNext}
+              onNext={() => setIdx((i) => Math.min(i + 1, order.length - 1))}
+              onShare={() => setShowShare(true)} />}
+
+        {showShare && <ShareCard text={shareText(clip, pick)} onClose={() => setShowShare(false)} />}
+
+        <div className="mt-10 pt-4 text-xs" style={{ borderTop: "1px solid " + PALETTE.line, color: PALETTE.mute }}>
+          Prototype · responses are not saved · split bars are seeded illustrative numbers (only your own answer is real until a backend collects responses). Predict has a real answer; diagnose and adjust do not — by design, the disagreement is the product.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Cradl />);
+</script>
+</body>
+</html>
